@@ -1,0 +1,32 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments/editor noise
+.env
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Generated conversion outputs, local experiments, and heavy artifacts
+experiments/
+backups/
+marker_layouts/
+workspace/
+*.pkl
+*.npz
+*.c3d
+*.bvh
+
+# Private research notes/reports
+ANALYSIS.md
+RESULT_REPORT.md
+
+# Logs/runtime dumps
+*.log
+logs/
