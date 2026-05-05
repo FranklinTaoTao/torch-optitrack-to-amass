@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
-from .helpers import _repo_root
 from .pipeline import run_conversion
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_SUPPORT_DIR = _PROJECT_ROOT / "support_files"
+_DEFAULT_LABEL_MAP = _PROJECT_ROOT / "examples" / "optitrack_to_amass_label_map_suggested.json"
+_DEFAULT_MARKER_LAYOUT = _PROJECT_ROOT / "examples" / "smplx_marker_layout_41.json"
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -15,16 +20,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--mocap", required=True, help="Path to labeled .c3d file")
-    p.add_argument("--support-base-dir", default=str(_repo_root() / "support_files"), help="Path to support assets")
-    p.add_argument("--model-base-dir", default=str(_repo_root() / "support_files"), help="Folder containing SMPL-X model files")
+    p.add_argument("--support-base-dir", default=str(_DEFAULT_SUPPORT_DIR), help="Path to support assets")
+    p.add_argument("--model-base-dir", default=str(_DEFAULT_SUPPORT_DIR), help="Folder containing SMPL-X model files")
     p.add_argument("--model-file", default=None, help="Direct path to SMPL-X model.pkl loadable by smplx")
     p.add_argument("--output-dir", default=None, help="Write all generated files directly into this directory")
     p.add_argument("--work-base-dir", default=None, help="Legacy MoSh-style output root: writes into <work-base-dir>/workspace/<input-folder>")
     p.add_argument("--surface-model-type", default="smplx", choices=["smplx"])
     p.add_argument("--gender", default="neutral", choices=["male", "female", "neutral"])
     p.add_argument("--mocap-unit", default="auto", choices=["auto", "mm", "cm", "m"])
-    p.add_argument("--labels-map-json", default=None)
-    p.add_argument("--marker-layout", default=None, help="Optional existing marker layout JSON")
+    p.add_argument("--labels-map-json", default=str(_DEFAULT_LABEL_MAP),
+                   help="C3D label-name map. Defaults to the bundled OptiTrack Baseline (41) suggestion.")
+    p.add_argument("--marker-layout", default=str(_DEFAULT_MARKER_LAYOUT),
+                   help="SMPL-X marker layout JSON. Defaults to the bundled OptiTrack Baseline (41) layout.")
     p.add_argument("--stagei-pkl", default=None, help="Optional existing Torch stage-I pickle; skips stage-I optimization.")
     p.add_argument("--pose-body-prior", default="auto", help="Path, 'auto', or 'none'")
     p.add_argument("--wrist-markers-on-stick", action="store_true")

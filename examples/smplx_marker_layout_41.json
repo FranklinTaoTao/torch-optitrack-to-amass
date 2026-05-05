@@ -1,0 +1,52 @@
+{
+  "markersets": [
+    {
+      "distance_from_skin": 0.0095,
+      "indices": {
+        "ARIEL": 9011,
+        "C7": 3832,
+        "FHEAD": 8949,
+        "LANK": 5882,
+        "LBAK": 3336,
+        "LBSH": 4137,
+        "LBWT": 5697,
+        "LELB": 4302,
+        "LFIN": 4788,
+        "LFWT": 3486,
+        "LHEE": 8846,
+        "LIWR": 4726,
+        "LKNE": 3682,
+        "LMT1": 5890,
+        "LMT5": 5901,
+        "LOWR": 4722,
+        "LSHN": 3712,
+        "LSHOUP": 3374,
+        "LTHILO": 3477,
+        "LTOE": 5787,
+        "LUPA": 4030,
+        "RANK": 8576,
+        "RBAK": 6127,
+        "RBHD": 3066,
+        "RBSH": 7192,
+        "RBWT": 8391,
+        "RELB": 7040,
+        "RFIN": 7524,
+        "RFWT": 6248,
+        "RHEE": 8634,
+        "RIWR": 7462,
+        "RKNE": 6443,
+        "RMT1": 8584,
+        "RMT5": 8595,
+        "ROWR": 7458,
+        "RSHN": 6473,
+        "RSHOUP": 6210,
+        "RTHILO": 6238,
+        "RTOE": 8481,
+        "RUPA": 6777,
+        "STRN": 5531
+      },
+      "type": "body"
+    }
+  ],
+  "surface_model_type": "smplx"
+}

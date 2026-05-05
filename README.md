@@ -36,25 +36,49 @@ You need:
 
 - A labeled OptiTrack `.c3d` file: passed with `--mocap`.
 - SMPL-X model/support files: used for the body model and pose prior.
-- Optionally, a marker label map JSON: passed with `--labels-map-json` when
-  your C3D labels need to be renamed to the marker names used by this tool.
-- Optionally, a marker layout JSON: passed with `--marker-layout` if you already
-  have one.
+- Usually no extra marker files are needed. The default label map and marker
+  layout are bundled in `examples/`.
 
-`--marker-layout` is an **input** file when provided. It tells the converter
-which SMPL-X surface vertex each marker starts from. If you do not provide it,
-the converter creates a new marker layout JSON automatically and writes it into
-the output directory.
+The bundled marker files target OptiTrack Motive's **Full Body Baseline (41)**
+Skeleton Marker Set. OptiTrack describes Motive skeleton tracking as using
+pre-defined Skeleton Marker Set templates, and its full-body templates include
+Baseline (41). See the OptiTrack docs:
+<https://docs.optitrack.com/v3.3/markersets/full-body/baseline-41>.
 
-An example OptiTrack label map is included at
-`examples/optitrack_to_amass_label_map_suggested.json`. Use it directly if your
-C3D marker labels match that convention, or copy/edit it for your own marker
-names.
+The two bundled files do different jobs:
 
-By default, `--support-base-dir` and `--model-base-dir` point to the
-development layout's `support_files` folder. If your SMPL-X files and
-`pose_body_prior.pkl` are already there, you can omit both options. If they are
-somewhere else, pass:
+- `examples/optitrack_to_amass_label_map_suggested.json` maps Motive/C3D marker
+  labels such as `WaistLFront` to the AMASS/MoSh-style labels used internally,
+  such as `LFWT`.
+- `examples/smplx_marker_layout_41.json` maps those AMASS/MoSh-style marker
+  labels to initial SMPL-X surface vertices. This is a generic starting layout,
+  not a fitted subject calibration.
+
+Both are used by default. Override `--labels-map-json` only when your C3D marker
+names differ from the bundled OptiTrack Baseline (41) suggestion. Override
+`--marker-layout` only when you have a better marker-to-SMPL-X surface template
+for your own marker set.
+
+The expected support-file layout is:
+
+```text
+torch_optitrack_to_amass/
+  support_files/
+    smplx/
+      female/
+        model.pkl
+      male/
+        model.pkl
+      neutral/
+        model.pkl
+      pose_body_prior.pkl
+```
+
+If these files are under `torch_optitrack_to_amass/support_files/`, you can omit
+`--support-base-dir`, `--model-base-dir`, `--model-file`, and
+`--pose-body-prior`. The SMPL-X model files are not redistributed by this repo;
+download them from the official SMPL-X source and place them in this folder.
+If your files are somewhere else, pass:
 
 ```bash
 --support-base-dir /path/to/support_files \
@@ -76,7 +100,6 @@ Run a full conversion:
   torch_optitrack_to_amass/convert_optitrack_to_amass_torch.py \
   --mocap "c3dexamples/Take 2026-04-16 03.50.18 PM_cal.c3d" \
   --output-dir torch_optitrack_to_amass/experiments/my_fit \
-  --labels-map-json torch_optitrack_to_amass/examples/optitrack_to_amass_label_map_suggested.json \
   --gender female \
   --device auto \
   --verbose \
@@ -87,12 +110,14 @@ With `--output-dir`, all generated files are written directly into that folder:
 
 ```text
 my_fit/
-  Take_..._smplx.json              # generated marker layout, if --marker-layout was omitted
   Take_..._female_stagei.pkl
   Take_..._female_stagei.npz
   Take_..._stageii.pkl
   Take_..._stageii.npz             # main AMASS-compatible output
 ```
+
+The default marker layout is an input template. Stage I still writes the fitted
+subject shape and marker locations to `*_stagei.pkl`/`*_stagei.npz`.
 
 The old `--work-base-dir` option is still available for compatibility with the
 original MoSh++ folder convention. It writes to
@@ -112,7 +137,6 @@ For a tiny smoke test:
   torch_optitrack_to_amass/convert_optitrack_to_amass_torch.py \
   --mocap "c3dexamples/Take 2026-04-16 03.50.18 PM_cal.c3d" \
   --output-dir torch_optitrack_to_amass/experiments/smoke_test \
-  --labels-map-json torch_optitrack_to_amass/examples/optitrack_to_amass_label_map_suggested.json \
   --gender female \
   --end-fidx 5 \
   --stagei-num-frames 2 \
@@ -130,7 +154,6 @@ only motion:
   torch_optitrack_to_amass/convert_optitrack_to_amass_torch.py \
   --mocap "c3dexamples/Take 2026-04-16 03.50.18 PM_cal.c3d" \
   --output-dir torch_optitrack_to_amass/experiments/my_stageii_only_fit \
-  --labels-map-json torch_optitrack_to_amass/examples/optitrack_to_amass_label_map_suggested.json \
   --gender female \
   --stagei-pkl path/to/*_female_stagei.pkl \
   --verbose \
@@ -143,9 +166,10 @@ only motion:
 - `--start-fidx N`: start from frame `N`.
 - `--output-dir DIR`: write all outputs directly into `DIR`.
 - `--work-base-dir DIR`: legacy output root using the MoSh++ workspace layout.
-- `--marker-layout FILE`: optional existing marker layout input. If omitted,
-  one is generated.
-- `--labels-map-json FILE`: optional input label map from C3D labels to marker names.
+- `--marker-layout FILE`: marker-to-SMPL-X layout input. Defaults to
+  `examples/smplx_marker_layout_41.json`.
+- `--labels-map-json FILE`: C3D-label to AMASS-label map. Defaults to
+  `examples/optitrack_to_amass_label_map_suggested.json`.
 - `--stagei-pkl FILE`: skip Stage I and reuse an existing shape/marker fit.
 - `--stagei-only`: run only Stage I.
 - `--device auto|cuda|cpu`: choose compute device.
