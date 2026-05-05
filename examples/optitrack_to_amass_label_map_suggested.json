@@ -1,0 +1,49 @@
+{
+  "WaistLFront": "LFWT",
+  "WaistRFront": "RFWT",
+  "WaistLBack": "LBWT",
+  "WaistRBack": "RBWT",
+
+  "BackTop": "C7",
+  "BackLeft": "LBAK",
+  "BackRight": "RBAK",
+  "Chest": "STRN",
+
+  "HeadTop": "ARIEL",
+  "HeadFront": "FHEAD",
+  "HeadSide": "AUTO_HEADSIDE",
+
+  "LShoulderBack": "LBSH",
+  "LShoulderTop": "LSHOUP",
+  "LUArmHigh": "LUPA",
+  "LElbowOut": "LELB",
+  "LWristIn": "LIWR",
+  "LWristOut": "LOWR",
+  "LHandOut": "LFIN",
+
+  "RShoulderBack": "RBSH",
+  "RShoulderTop": "RSHOUP",
+  "RUArmHigh": "RUPA",
+  "RElbowOut": "RELB",
+  "RWristIn": "RIWR",
+  "RWristOut": "ROWR",
+  "RHandOut": "RFIN",
+
+  "LThigh": "LTHILO",
+  "LKneeOut": "LKNE",
+  "LShin": "LSHN",
+  "LAnkleOut": "LANK",
+  "LHeel": "LHEE",
+  "LToeIn": "LMT1",
+  "LToeOut": "LMT5",
+  "LToeTip": "LTOE",
+
+  "RThigh": "RTHILO",
+  "RKneeOut": "RKNE",
+  "RShin": "RSHN",
+  "RAnkleOut": "RANK",
+  "RHeel": "RHEE",
+  "RToeIn": "RMT1",
+  "RToeOut": "RMT5",
+  "RToeTip": "RTOE"
+}

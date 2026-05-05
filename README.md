@@ -46,6 +46,11 @@ which SMPL-X surface vertex each marker starts from. If you do not provide it,
 the converter creates a new marker layout JSON automatically and writes it into
 the output directory.
 
+An example OptiTrack label map is included at
+`examples/optitrack_to_amass_label_map_suggested.json`. Use it directly if your
+C3D marker labels match that convention, or copy/edit it for your own marker
+names.
+
 By default, `--support-base-dir` and `--model-base-dir` point to the
 development layout's `support_files` folder. If your SMPL-X files and
 `pose_body_prior.pkl` are already there, you can omit both options. If they are
@@ -71,7 +76,7 @@ Run a full conversion:
   torch_optitrack_to_amass/convert_optitrack_to_amass_torch.py \
   --mocap "c3dexamples/Take 2026-04-16 03.50.18 PM_cal.c3d" \
   --output-dir torch_optitrack_to_amass/experiments/my_fit \
-  --labels-map-json mosh_output/optitrack_to_amass_label_map_suggested.json \
+  --labels-map-json torch_optitrack_to_amass/examples/optitrack_to_amass_label_map_suggested.json \
   --gender female \
   --device auto \
   --verbose \
@@ -107,7 +112,7 @@ For a tiny smoke test:
   torch_optitrack_to_amass/convert_optitrack_to_amass_torch.py \
   --mocap "c3dexamples/Take 2026-04-16 03.50.18 PM_cal.c3d" \
   --output-dir torch_optitrack_to_amass/experiments/smoke_test \
-  --labels-map-json mosh_output/optitrack_to_amass_label_map_suggested.json \
+  --labels-map-json torch_optitrack_to_amass/examples/optitrack_to_amass_label_map_suggested.json \
   --gender female \
   --end-fidx 5 \
   --stagei-num-frames 2 \
@@ -125,7 +130,7 @@ only motion:
   torch_optitrack_to_amass/convert_optitrack_to_amass_torch.py \
   --mocap "c3dexamples/Take 2026-04-16 03.50.18 PM_cal.c3d" \
   --output-dir torch_optitrack_to_amass/experiments/my_stageii_only_fit \
-  --labels-map-json mosh_output/optitrack_to_amass_label_map_suggested.json \
+  --labels-map-json torch_optitrack_to_amass/examples/optitrack_to_amass_label_map_suggested.json \
   --gender female \
   --stagei-pkl path/to/*_female_stagei.pkl \
   --verbose \
