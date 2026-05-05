@@ -10,7 +10,10 @@ def run_conversion(args: argparse.Namespace) -> None:
     mocap_fname = Path(args.mocap).expanduser().resolve()
     support_base_dir = Path(args.support_base_dir).expanduser().resolve()
     model_base_dir = Path(args.model_base_dir).expanduser().resolve()
-    work_base_dir = Path(args.work_base_dir).expanduser().resolve()
+    output_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else None
+    work_base_dir = Path(args.work_base_dir).expanduser().resolve() if args.work_base_dir else None
+    if output_dir is None and work_base_dir is None:
+        raise ValueError("Pass --output-dir for direct output, or --work-base-dir for legacy MoSh-style output.")
     if args.surface_model_type != "smplx":
         raise NotImplementedError("The Torch converter currently supports SMPL-X only.")
     if not mocap_fname.exists():
@@ -24,7 +27,7 @@ def run_conversion(args: argparse.Namespace) -> None:
     if not labels:
         raise RuntimeError("No labeled markers found in mocap.")
 
-    marker_layout_dir = work_base_dir / "marker_layouts"
+    marker_layout_dir = output_dir if output_dir is not None else work_base_dir / "marker_layouts"
     marker_layout_fname = Path(args.marker_layout) if args.marker_layout else marker_layout_dir / f"{mocap_fname.stem}_{args.surface_model_type}.json"
     if marker_layout_fname.exists():
         marker_meta = load_marker_layout(marker_layout_fname)
@@ -56,7 +59,7 @@ def run_conversion(args: argparse.Namespace) -> None:
         print("Body pose prior disabled.")
 
     stem = _sanitize_stem(mocap_fname.stem)
-    out_dir = work_base_dir / "workspace" / mocap_fname.parent.name
+    out_dir = output_dir if output_dir is not None else work_base_dir / "workspace" / mocap_fname.parent.name
     stagei_pkl = out_dir / f"{stem}_{args.gender}_stagei.pkl"
     stagei_npz = stagei_pkl.with_suffix(".npz")
     stageii_pkl = out_dir / f"{stem}_stageii.pkl"

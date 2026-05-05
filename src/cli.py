@@ -18,7 +18,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--support-base-dir", default=str(_repo_root() / "support_files"), help="Path to support assets")
     p.add_argument("--model-base-dir", default=str(_repo_root() / "support_files"), help="Folder containing SMPL-X model files")
     p.add_argument("--model-file", default=None, help="Direct path to SMPL-X model.pkl loadable by smplx")
-    p.add_argument("--work-base-dir", required=True, help="Output work directory")
+    p.add_argument("--output-dir", default=None, help="Write all generated files directly into this directory")
+    p.add_argument("--work-base-dir", default=None, help="Legacy MoSh-style output root: writes into <work-base-dir>/workspace/<input-folder>")
     p.add_argument("--surface-model-type", default="smplx", choices=["smplx"])
     p.add_argument("--gender", default="neutral", choices=["male", "female", "neutral"])
     p.add_argument("--mocap-unit", default="auto", choices=["auto", "mm", "cm", "m"])
@@ -177,7 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--log-every", type=int, default=50)
 
     important_args = {
-        "help", "mocap", "work_base_dir", "support_base_dir", "model_base_dir",
+        "help", "mocap", "output_dir", "work_base_dir", "support_base_dir", "model_base_dir",
         "model_file", "marker_layout", "labels_map_json", "gender", "stagei_pkl",
         "stagei_only", "start_fidx", "end_fidx", "ds_rate", "device",
         "stagei_num_frames", "stageii_block_size", "verbose", "log_every",
