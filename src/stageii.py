@@ -3,6 +3,17 @@ from __future__ import annotations
 from .helpers import *
 
 def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData, stagei_data: Dict, device: torch.device) -> Dict:
+    def create_stageii_model(*pos, **kw):
+        model = create_smplx_model(*pos, **kw)
+        if getattr(args, 'stageii_cache_forward', True):
+            if getattr(args, 'stageii_cuda_graphs', False):
+                from .cuda_graph_forward import GraphedStageIIForward
+                model._cached_stageii_forward = GraphedStageIIForward(model)
+            else:
+                from .cached_forward import CachedStageIIForward
+                model._cached_stageii_forward = CachedStageIIForward(model)
+        return model
+
     dtype = torch.float32
     latent_labels = list(stagei_data["latent_labels"])
     obs_all, mask_all, obs_np = make_observation_tensors(mocap, latent_labels, device, dtype)
@@ -11,7 +22,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
     if "torch_marker_coeffs" not in stagei_data:
         # Original MoSh++ pickles do not carry Torch marker bases. Rebuild the
         # closest analogue from the optimized latent markers in canonical space.
-        basis_model = create_smplx_model(model_file, batch_size=1, gender=args.gender, num_betas=args.num_betas, device=device)
+        basis_model = create_stageii_model(model_file, batch_size=1, gender=args.gender, num_betas=args.num_betas, device=device)
         basis_faces = np.asarray(basis_model.faces, dtype=np.int64)
         with torch.no_grad():
             basis_verts = smplx_forward(
@@ -59,7 +70,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
     marker_weights = marker_weight_tensor(latent_labels, args.arm_marker_weight, device, dtype)
     started = time.time()
 
-    init_model = create_smplx_model(model_file, batch_size=1, gender=args.gender, num_betas=args.num_betas, device=device)
+    init_model = create_stageii_model(model_file, batch_size=1, gender=args.gender, num_betas=args.num_betas, device=device)
     init_faces = make_face_tensor(init_model, device)
     init_marker_vids = torch.as_tensor(marker_vids_np, dtype=torch.long, device=device)
     init_tangent_vids = torch.as_tensor(tangent_vids_np, dtype=torch.long, device=device)
@@ -87,7 +98,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
         print(f"stage II rigid initialization for {nframes} frames: {time.time() - rigid_started:.3f}s")
 
     if args.stageii_sequential_lbfgs:
-        model = create_smplx_model(model_file, batch_size=1, gender=args.gender, num_betas=args.num_betas, device=device)
+        model = create_stageii_model(model_file, batch_size=1, gender=args.gender, num_betas=args.num_betas, device=device)
         faces = make_face_tensor(model, device)
         marker_vids = torch.as_tensor(marker_vids_np, dtype=torch.long, device=device)
         tangent_vids = torch.as_tensor(tangent_vids_np, dtype=torch.long, device=device)
@@ -137,12 +148,89 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
                 fullgraph=args.stageii_compile_fullgraph,
             )
 
+        def stageii_markers(net, beta, body, root, trans, count):
+            """Keep marker-only optimizations separate from full vertex callers."""
+            def readout(vertices):
+                if nn_vids is not None:
+                    return reconstruct_markers_nn(vertices, nn_vids, coeffs)
+                return reconstruct_markers(vertices, faces, marker_vids, tangent_vids, coeffs)
+            if (getattr(args, 'stageii_graph_markers', True)
+                    and getattr(args, 'stageii_cuda_graphs', True)
+                    and getattr(args, 'stageii_cache_forward', True) and body.is_cuda):
+                if not hasattr(net, '_cached_marker_graph'):
+                    from .cuda_graph_forward import GraphedStageIIForward
+                    selected_vids = None
+                    marker_readout = readout
+                    if (getattr(args, 'stageii_select_marker_vertices', True) and nn_vids is not None
+                            and args.stageii_solver == 'dogleg' and args.stageii_dogleg_jacobian_mode == 'fd'):
+                        selected_vids, inverse = torch.unique(nn_vids, sorted=True, return_inverse=True)
+
+                        def marker_readout(vertices):
+                            return reconstruct_markers_nn(vertices, inverse, coeffs)
+
+                    net._cached_marker_graph = GraphedStageIIForward(
+                        net, marker_readout,
+                        repeated_skin=getattr(net, '_repeated_skin', False),
+                        vertex_ids=selected_vids,
+                    )
+                return net._cached_marker_graph(beta, body, root, trans, count)
+            return readout(smplx_forward(net, beta, body, root, trans, count))
+
+        residual_graphs = {}
+
+        def graph_residual_tail(pred, body, root, weight, observation, mask_float,
+                                valid_ids, extrapolated, pose_coefficient, history, rows):
+            """Cache fixed layouts, passing all changing frame data explicitly."""
+            def tail(pred, body, root, weight, observation, mask_float, valid_ids, extrapolated, pose_coefficient):
+                if rows:
+                    nrows = body.shape[0]
+                    data = weight * (pred - observation)
+                    data = data * mask_float[0, :, None]
+                    pose_res = pose_coefficient * pose_prior_residual_rows(body)
+                    pose_vec = torch.cat([root, body], dim=1)
+                    if history:
+                        diff = pose_vec - extrapolated[None]
+                        velo = 2.5 * diff
+                        wrist = wrist_temporal_residual_values(diff)
+                    else:
+                        velo = torch.zeros_like(pose_vec)
+                        wrist = body[:, :0]
+                    return math.sqrt(args.stageii_mosh_weight_scale) * torch.cat(
+                        [data.reshape(nrows, -1), pose_res, velo, wrist], dim=1)
+                data = (weight * (pred[0].index_select(0, valid_ids) - observation[0].index_select(0, valid_ids))).reshape(-1)
+                pose_res = pose_coefficient * pose_prior.residual(body)
+                pose_vec = torch.cat([root.reshape(-1), body.reshape(-1)])
+                if history:
+                    diff = pose_vec - extrapolated
+                    velo = 2.5 * diff
+                    wrist = wrist_temporal_residual_from_diff(diff)
+                else:
+                    velo = pose_vec[:0]
+                    wrist = pose_vec[:0]
+                return math.sqrt(args.stageii_mosh_weight_scale) * torch.cat([data, pose_res, velo, wrist], dim=0)
+            inputs = (
+                pred, body, root, weight, observation, mask_float,
+                valid_ids, extrapolated, pose_coefficient,
+            )
+            key = (rows, history, tuple((tuple(x.shape), x.dtype) for x in inputs))
+            if key not in residual_graphs:
+                from .residual_graph import ResidualGraph
+                residual_graphs[key] = ResidualGraph(tail, inputs)
+            return residual_graphs[key](inputs)
+
         fd_basis = torch.eye(69, dtype=dtype, device=device)
         fd_model = None
         fd_betas = None
+        repeated_model = None
         if args.stageii_dogleg_jacobian_mode == "fd":
-            fd_model = create_smplx_model(model_file, batch_size=70, gender=args.gender, num_betas=args.num_betas, device=device)
+            fd_model = create_stageii_model(model_file, batch_size=70, gender=args.gender, num_betas=args.num_betas, device=device)
             fd_betas = betas.expand(70, -1)
+            if (getattr(args, 'stageii_repeated_skin', True) and device.type == 'cuda'
+                    and getattr(args, 'stageii_cache_forward', True)
+                    and getattr(args, 'stageii_cuda_graphs', True)
+                    and getattr(args, 'stageii_graph_markers', True)):
+                repeated_model = create_stageii_model(model_file, batch_size=70, gender=args.gender, num_betas=args.num_betas, device=device)
+                repeated_model._repeated_skin = True
 
         def apply_pose_mask(body_pose_tensor: torch.Tensor) -> torch.Tensor:
             if args.stageii_freeze_toes or args.stageii_mosh_loss:
@@ -153,10 +241,13 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
 
         wrist_pose_slice = slice(3 + 19 * 3, 3 + 21 * 3)
 
+        wrist_sigma_tensor = torch.as_tensor(float(args.stageii_wrist_velocity_sigma), dtype=dtype, device=device)
+
         def robust_vector_residual(diff: torch.Tensor, sigma: float) -> torch.Tensor:
+            # All callers use the fixed wrist sigma, allocated before capture.
             if sigma <= 0.0:
                 return diff
-            sigma_t = torch.as_tensor(float(sigma), dtype=diff.dtype, device=diff.device)
+            sigma_t = wrist_sigma_tensor
             sq = torch.sum(diff * diff, dim=-1, keepdim=True)
             rho2 = 2.0 * sigma_t * sigma_t * (torch.sqrt(1.0 + sq / (sigma_t * sigma_t)) - 1.0)
             scale = torch.sqrt(rho2 / sq.clamp_min(1e-12))
@@ -201,7 +292,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
             from torch.func import jacfwd, vmap
 
             iblock_size = max(1, int(args.stageii_independent_block_size))
-            imodel = create_smplx_model(model_file, batch_size=1, gender=args.gender, num_betas=args.num_betas, device=device)
+            imodel = create_stageii_model(model_file, batch_size=1, gender=args.gender, num_betas=args.num_betas, device=device)
             if nn_vids is None:
                 raise ValueError("--stageii-independent-block-size currently requires NN marker coefficients.")
             ibetas = betas
@@ -360,7 +451,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
                     body_t = apply_pose_mask(x[:, 3:66])
                     trans_t = x[:, 66:69]
                     verts = smplx_forward(
-                        create_smplx_model(model_file, batch_size=bsz, gender=args.gender, num_betas=args.num_betas, device=device),
+                        create_stageii_model(model_file, batch_size=bsz, gender=args.gender, num_betas=args.num_betas, device=device),
                         betas.expand(bsz, -1),
                         body_t,
                         root_t,
@@ -431,7 +522,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
 
             block_size = max(1, int(args.stageii_block_size))
             block_models = {
-                block_size: create_smplx_model(
+                block_size: create_stageii_model(
                     model_file,
                     batch_size=block_size,
                     gender=args.gender,
@@ -445,7 +536,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
 
             def get_block_model(bsz: int):
                 if bsz not in block_models:
-                    block_models[bsz] = create_smplx_model(
+                    block_models[bsz] = create_stageii_model(
                         model_file,
                         batch_size=bsz,
                         gender=args.gender,
@@ -456,7 +547,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
 
             def get_fd_block_model(total_batch: int):
                 if total_batch not in fd_block_models:
-                    fd_block_models[total_batch] = create_smplx_model(
+                    fd_block_models[total_batch] = create_stageii_model(
                         model_file,
                         batch_size=total_batch,
                         gender=args.gender,
@@ -896,6 +987,14 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
 
             obs = obs_all[fidx:fidx + 1]
             mask = mask_all[fidx:fidx + 1]
+            frame_mask_float = mask.float()
+            frame_weight = 400.0 * (46.0 / frame_mask_float.sum().clamp_min(1.0))
+            frame_obs_clean = torch.nan_to_num(obs, nan=0.0)
+            frame_valid_ids = torch.nonzero(mask[0], as_tuple=False).flatten()
+            if prev_pose_vec_seq is not None and prev_prev_pose_vec_seq is not None:
+                frame_prev = torch.as_tensor(prev_pose_vec_seq, dtype=dtype, device=device)
+                frame_prev_prev = torch.as_tensor(prev_prev_pose_vec_seq, dtype=dtype, device=device)
+                frame_extrapolated = frame_prev + (frame_prev - frame_prev_prev)
             global_orient = torch.nn.Parameter(torch.as_tensor(root_init, dtype=dtype, device=device))
             body_pose = torch.nn.Parameter(torch.as_tensor(body_init, dtype=dtype, device=device))
             transl = torch.nn.Parameter(torch.as_tensor(trans_init, dtype=dtype, device=device))
@@ -953,23 +1052,23 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
                 body_x_raw = x[3:66].reshape(1, SMPLX_BODY_DOF)
                 trans_x = x[66:69].reshape(1, 3)
                 body_x = apply_pose_mask(body_x_raw)
-                verts_x = stageii_forward(betas, body_x, root_x, trans_x)
-                if nn_vids is not None:
-                    pred_x = reconstruct_markers_nn(verts_x, nn_vids, coeffs)
-                else:
-                    pred_x = reconstruct_markers(verts_x, faces, marker_vids, tangent_vids, coeffs)
-                marker_count = mask.float().sum().clamp_min(1.0)
-                wt_data = 400.0 * (46.0 / marker_count)
-                valid = mask[0]
-                data_res = (wt_data * (pred_x[0, valid] - obs[0, valid])).reshape(-1)
+                pred_x = stageii_markers(model, betas, body_x, root_x, trans_x, 1)
+                if (getattr(args, 'stageii_graph_residuals', True)
+                        and getattr(args, 'stageii_cuda_graphs', True)
+                        and getattr(args, 'stageii_cache_forward', True)
+                        and x.is_cuda and not x.requires_grad):
+                    history = prev_pose_vec_seq is not None and prev_prev_pose_vec_seq is not None
+                    extrap = frame_extrapolated if history else x.new_zeros(66)
+                    coefficient = x.new_tensor(1.6 * pose_weight_multiplier)
+                    return graph_residual_tail(pred_x, body_x, root_x, frame_weight, obs, frame_mask_float,
+                                               frame_valid_ids, extrap, coefficient, history, False)
+                data_res = (frame_weight * (pred_x[0].index_select(0, frame_valid_ids) - obs[0].index_select(0, frame_valid_ids))).reshape(-1)
                 pose_res = (1.6 * pose_weight_multiplier) * pose_prior.residual(body_x)
                 pose_vec = torch.cat([root_x.reshape(-1), body_x.reshape(-1)])
                 if prev_pose_vec_seq is None or prev_prev_pose_vec_seq is None:
                     velo_res = pose_vec[:0]
                 else:
-                    prev = torch.as_tensor(prev_pose_vec_seq, dtype=x.dtype, device=x.device)
-                    prev_prev = torch.as_tensor(prev_prev_pose_vec_seq, dtype=x.dtype, device=x.device)
-                    velo_diff = pose_vec - (prev + (prev - prev_prev))
+                    velo_diff = pose_vec - frame_extrapolated
                     velo_res = 2.5 * velo_diff
                     wrist_res = wrist_temporal_residual_from_diff(velo_diff)
                 if prev_pose_vec_seq is None or prev_prev_pose_vec_seq is None:
@@ -977,30 +1076,32 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
                 scale = math.sqrt(args.stageii_mosh_weight_scale)
                 return scale * torch.cat([data_res, pose_res, velo_res, wrist_res], dim=0)
 
-            def lm_residual_rows(x_rows: torch.Tensor, pose_weight_multiplier: float = 1.0) -> torch.Tensor:
+            def lm_residual_rows(x_rows: torch.Tensor, pose_weight_multiplier: float = 1.0, repeated: bool = False) -> torch.Tensor:
                 nrows = x_rows.shape[0]
                 root_x = x_rows[:, :3]
                 body_x_raw = x_rows[:, 3:66]
                 trans_x = x_rows[:, 66:69]
                 body_x = apply_pose_mask(body_x_raw)
-                verts_x = smplx_forward(fd_model, fd_betas, body_x, root_x, trans_x, nrows)
-                if nn_vids is not None:
-                    pred_x = reconstruct_markers_nn(verts_x, nn_vids, coeffs)
-                else:
-                    pred_x = reconstruct_markers(verts_x, faces, marker_vids, tangent_vids, coeffs)
-                marker_count = mask.float().sum().clamp_min(1.0)
-                wt_data = 400.0 * (46.0 / marker_count)
-                data_res = wt_data * (pred_x - torch.nan_to_num(obs, nan=0.0))
-                data_res = data_res * mask.float()[0, :, None]
+                residual_model = repeated_model if repeated and repeated_model is not None else fd_model
+                pred_x = stageii_markers(residual_model, fd_betas, body_x, root_x, trans_x, nrows)
+                if (getattr(args, 'stageii_graph_residuals', True)
+                        and getattr(args, 'stageii_cuda_graphs', True)
+                        and getattr(args, 'stageii_cache_forward', True)
+                        and x_rows.is_cuda and not x_rows.requires_grad):
+                    history = prev_pose_vec_seq is not None and prev_prev_pose_vec_seq is not None
+                    extrap = frame_extrapolated if history else x_rows.new_zeros(66)
+                    coefficient = x_rows.new_tensor(1.6 * pose_weight_multiplier)
+                    return graph_residual_tail(pred_x, body_x, root_x, frame_weight, frame_obs_clean, frame_mask_float,
+                                               frame_valid_ids, extrap, coefficient, history, True)
+                data_res = frame_weight * (pred_x - frame_obs_clean)
+                data_res = data_res * frame_mask_float[0, :, None]
                 pose_res = (1.6 * pose_weight_multiplier) * pose_prior_residual_rows(body_x)
                 pose_vec = torch.cat([root_x, body_x], dim=1)
                 if prev_pose_vec_seq is None or prev_prev_pose_vec_seq is None:
                     velo_res = torch.zeros_like(pose_vec)
                     wrist_res = x_rows[:, :0]
                 else:
-                    prev = torch.as_tensor(prev_pose_vec_seq, dtype=x_rows.dtype, device=x_rows.device)
-                    prev_prev = torch.as_tensor(prev_prev_pose_vec_seq, dtype=x_rows.dtype, device=x_rows.device)
-                    velo_diff = pose_vec - (prev + (prev - prev_prev))[None]
+                    velo_diff = pose_vec - frame_extrapolated[None]
                     velo_res = 2.5 * velo_diff
                     wrist_res = wrist_temporal_residual_values(velo_diff)
                 scale = math.sqrt(args.stageii_mosh_weight_scale)
@@ -1095,19 +1196,22 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
                     def residual_for_jac(y: torch.Tensor) -> torch.Tensor:
                         return lm_residual(y, pose_weight_multiplier)
 
-                    residual_started = profile_now(prof)
-                    if args.stageii_dogleg_jacobian_mode == "fd":
-                        residual = lm_residual_rows(x.detach()[None].expand(70, -1), pose_weight_multiplier)[0]
-                    else:
-                        residual = residual_for_jac(x_req)
-                    loss_value = 0.5 * torch.sum(residual * residual)
-                    best_loss = float((2.0 * loss_value).detach().cpu())
-                    profile_add(prof, "dogleg_residual_current", residual_started)
                     refresh_due = force_refresh or jac is None or jtj is None
                     if args.stageii_dogleg_adaptive_refresh:
                         refresh_due = refresh_due or jac_age >= jac_refresh
                     else:
                         refresh_due = refresh_due or iter_idx % jac_refresh == 0
+                    # FD refresh already returns this exact current residual.
+                    # Preserve native70-row arithmetic when reusing the Jacobian.
+                    if not (refresh_due and args.stageii_dogleg_jacobian_mode == "fd"):
+                        residual_started = profile_now(prof)
+                        if args.stageii_dogleg_jacobian_mode == "fd":
+                            residual = lm_residual_rows(x.detach()[None].expand(70, -1), pose_weight_multiplier, repeated=True)[0]
+                        else:
+                            residual = residual_for_jac(x_req)
+                        loss_value = 0.5 * torch.sum(residual * residual)
+                        best_loss = float((2.0 * loss_value).detach().cpu())
+                        profile_add(prof, "dogleg_residual_current", residual_started)
                     refreshed_jac = False
                     if refresh_due:
                         jac_started = profile_now(prof)
@@ -1403,11 +1507,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
                 body_eval = apply_pose_mask(body_pose)
                 if args.stageii_torch_compile and hasattr(torch.compiler, "cudagraph_mark_step_begin"):
                     torch.compiler.cudagraph_mark_step_begin()
-                verts = stageii_forward(betas, body_eval, global_orient, transl)
-                if nn_vids is not None:
-                    pred = reconstruct_markers_nn(verts, nn_vids, coeffs)
-                else:
-                    pred = reconstruct_markers(verts, faces, marker_vids, tangent_vids, coeffs)
+                pred = stageii_markers(model, betas, body_eval, global_orient, transl, 1)
                 profile_add(prof, "final_forward_markers", final_forward_started)
 
             cpu_started = profile_now(prof)
@@ -1491,7 +1591,7 @@ def optimize_stageii(args, model_file: Path, marker_meta: Dict, mocap: MocapData
         if args.verbose:
             print(f"stage II batch {batch_idx + 1:04d}/{len(batches)} frames {start}:{end}: optimizing...")
 
-        model = create_smplx_model(model_file, batch_size=bsz, gender=args.gender, num_betas=args.num_betas, device=device)
+        model = create_stageii_model(model_file, batch_size=bsz, gender=args.gender, num_betas=args.num_betas, device=device)
         faces = make_face_tensor(model, device)
         marker_vids = torch.as_tensor(marker_vids_np, dtype=torch.long, device=device)
         tangent_vids = torch.as_tensor(tangent_vids_np, dtype=torch.long, device=device)

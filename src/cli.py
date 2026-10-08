@@ -131,6 +131,18 @@ def build_parser() -> argparse.ArgumentParser:
         ],
         default="dogleg",
                    help="Sequential Stage-II solver. 'lm', 'dogleg', and torchmin variants are experimental.")
+    p.add_argument("--stageii-cache-forward", action=argparse.BooleanOptionalAction, default=True,
+                   help="Cache fixed shape and CPU hierarchy indices in the native full-vertex Stage-II forward.")
+    p.add_argument("--stageii-cuda-graphs", action=argparse.BooleanOptionalAction, default=True,
+                   help="Replay native cached forward kernels with CUDA graphs; fall back for gradient-requiring calls.")
+    p.add_argument("--stageii-graph-markers", action=argparse.BooleanOptionalAction, default=True,
+                   help="Capture native marker reconstruction with the full-vertex forward.")
+    p.add_argument("--stageii-graph-residuals", action=argparse.BooleanOptionalAction, default=True,
+                   help="Replay native residual construction with explicit per-frame observations and history.")
+    p.add_argument("--stageii-repeated-skin", action=argparse.BooleanOptionalAction, default=True,
+                   help="Skip repeated skinning only for current residuals, preserving full70 pose/correction arithmetic.")
+    p.add_argument("--stageii-select-marker-vertices", action=argparse.BooleanOptionalAction, default=True,
+                   help="For FD dogleg with NN markers, evaluate final vertex multiplies only for marker vertices after full native skin matrices form.")
     p.add_argument("--stageii-block-size", type=int, default=1,
                    help="Experimental dogleg mode: optimize this many consecutive Stage-II frames jointly.")
     p.add_argument("--stageii-independent-block-size", type=int, default=1,
@@ -188,7 +200,9 @@ def build_parser() -> argparse.ArgumentParser:
         "help", "mocap", "output_dir", "work_base_dir", "support_base_dir", "model_base_dir",
         "model_file", "marker_layout", "labels_map_json", "gender", "stagei_pkl",
         "stagei_only", "start_fidx", "end_fidx", "ds_rate", "device",
-        "stagei_num_frames", "stageii_block_size", "verbose", "log_every",
+        "stagei_num_frames", "stageii_block_size", "stageii_cache_forward",
+        "stageii_cuda_graphs", "stageii_graph_markers", "stageii_graph_residuals",
+        "stageii_repeated_skin", "stageii_select_marker_vertices", "verbose", "log_every",
     }
     for action in p._actions:
         if action.dest not in important_args:

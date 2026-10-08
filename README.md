@@ -144,6 +144,65 @@ For a tiny smoke test:
   --verbose
 ```
 
+## Stage-II acceleration
+
+Stage II now caches fixed body-shape quantities and uses cached CPU hierarchy
+indices to avoid repeated CUDA scalar synchronizations. Native float32
+pose-blend and full skinning-matrix products, pose deformations, solver settings
+and frame rate are retained. CUDA graphs replay forward, marker and residual
+operations with explicit per-frame observations and history.
+In the default finite-difference dogleg/NN-marker path, repeated current
+residuals share only the verified skin/final multiply work; perturbed Jacobian
+rows remain distinct. Final per-vertex multiplies evaluate only NN marker
+vertices, after the full native matrix products. Other marker bases retain
+the full-vertex path. CPU and gradient-requiring calls use eager execution.
+Caching is enabled by default. Use `--no-stageii-cache-forward` to run the
+original forward path for comparisons or custom shape-optimization extensions.
+
+Local RTX 5070 Ti verification on full 120 Hz recordings, with identical Stage-I
+inputs in each comparison:
+
+| Frames | Original Stage II | Cached Stage II | Speedup |
+|---:|---:|---:|---:|
+| 23,613 | 493.16 s | 306.88 s | 1.61x |
+| 39,459 | 759.01 s | 510.07 s | 1.49x |
+
+Saved pose, shape and translation arrays were bit-identical; marker errors,
+joint positions, rotations and jerk were unchanged. Independent forward tests
+covered male/female/neutral models and shape/expression cache invalidation.
+The optimization changes Stage II only. Original Stage-I fits exhibit
+run-to-run variability, so independently refitted Stage-I results cannot be
+used as an accuracy-isolated comparison of this cache.
+
+Further local optimization, using the same Stage-I inputs and all frames:
+
+| Frames | Cache-only baseline | Latest Stage II | Speedup over cache |
+|---:|---:|---:|---:|
+| 23,613 | 298.40 s | 92.31 s | 3.23x |
+| 39,459 | 496.28 s | 151.26 s | 3.28x |
+
+These are isolated runs; the latest full timings reuse earlier baseline timing
+measurements, rather than fresh interleaved timing pairs. All exported motion,
+shape and marker fields are identical, with unchanged independent joint/rotation
+and jerk checks. Stage I is unchanged. Compared with the historical original
+converter timings above, the latest Stage II is approximately 5.0-5.3x faster.
+Normal installed defaults, all opt-outs and CPU fallback were tested separately.
+
+Use `--no-stageii-cuda-graphs` for eager cached execution or
+`--no-stageii-cache-forward` for the uncached model path. Individual switches are
+`--no-stageii-graph-markers`, `--no-stageii-graph-residuals`,
+`--no-stageii-repeated-skin`, and `--no-stageii-select-marker-vertices`.
+No precision reduction, frame decimation or solver/loss change is used.
+
+Regression tests (licensed model assets are not included):
+
+```bash
+SMPLX_MODEL_DIR=/path/to/smplx python -m unittest discover -s tests -v
+```
+
+GPU backend tests skip when CUDA or the model assets are unavailable. CLI tests
+run without those assets.
+
 ## Reuse Stage I
 
 If shape/marker fitting has already been done, reuse the Stage-I pickle and fit

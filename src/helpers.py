@@ -832,6 +832,8 @@ def smplx_forward(
     transl: torch.Tensor,
     batch_size: int,
 ) -> torch.Tensor:
+    if hasattr(model, '_cached_stageii_forward'):
+        return model._cached_stageii_forward(betas, body_pose, global_orient, transl, batch_size)
     zeros_hand = torch.zeros((batch_size, SMPLX_HAND_DOF), dtype=body_pose.dtype, device=body_pose.device)
     zeros_3 = torch.zeros((batch_size, 3), dtype=body_pose.dtype, device=body_pose.device)
     output = model(
