@@ -27,6 +27,9 @@ workspace/
 ANALYSIS.md
 RESULT_REPORT.md
 
+# Local research and dataset-preparation scripts
+/scripts/
+
 # Logs/runtime dumps
 *.log
 logs/
